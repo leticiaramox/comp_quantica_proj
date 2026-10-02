@@ -14,9 +14,6 @@ import qsd_optimized as q20
 # ------------------------------------------------ 1) tag gates with their block --
 @contextmanager
 def tagging(mod, leaf_size, leaf_name):
-    """Temporarily wraps mod.mux_rotation / mod.qsd so that they insert a
-    ("MARK", label, None) op before every multiplexed rotation and every leaf block.
-    Marks are only bookkeeping: they are stripped before simulation and drawing."""
     orig_mux, orig_qsd = mod.mux_rotation, mod.qsd
 
     def mux(ops, axis, target, controls, angles, *args, **kwargs):
@@ -41,8 +38,6 @@ def strip_marks(ops):
 
 # ------------------------------------------------------- 2) ops -> DataFrame ----
 def ops_to_df(ops, version, had=None):
-    """One row per gate. Columns:
-    version, step, block_id, block, block_type, gate, control, target, angle, matrix, cnot_cum"""
     rows, block_id, block, step = [], -1, "(none)", 0
     for kind, a, b in ops:
         if kind == "MARK":
@@ -69,7 +64,6 @@ def ops_to_df(ops, version, had=None):
 
 # ------------------------------------------------ 3) build both circuits --------
 def build_circuits(U, n):
-    """Returns {version: (ops_with_marks, module)}."""
     out = {}
 
     with tagging(q36, leaf_size=1, leaf_name="1q gate"):
