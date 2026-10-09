@@ -55,7 +55,7 @@ def qsd(ops, U, wires):
     u2 = u2 @ np.kron(PZ, np.eye(h // 2))
     demux(ops, u1, u2, wires)                                 
 
-# ================================================== two-qubit synthesis =====
+# ================================================== sintetizando two-qubit =====
 MAGIC = np.array([[1, 0, 0, 1j], [0, 1j, 1, 0], [0, 1j, -1, 0], [1, 0, 0, -1j]]) / np.sqrt(2)
 _XYZ = [np.kron(P, P) for P in (PX, PY, PZ)]
 _SIGNS = np.array([np.real(np.diag(MAGIC.conj().T @ PP @ MAGIC)) for PP in _XYZ]).T  
@@ -166,7 +166,7 @@ def lower_cz(ops):
         else: out.append(op)
     return out
 
-# ------------------------------------------------------ simulation / checks --
+# ------------------------------------------------------ verificando a validade do circuito --
 def op_matrix(op, n):
     kind, a, b = op
     dim = 2 ** n
@@ -202,7 +202,7 @@ def dist_up_to_phase(A, B):
     ph = ph / abs(ph)
     return np.linalg.norm(A / ph - B)
 
-# ----------------------------------------------------------------- drawing ---
+# ----------------------------------------------------------------- desenho do circuito ---
 def draw_matplotlib(ops, n, filename="qsd_optimized_circuit.png", gates_per_row=22, title=None):
     import matplotlib
     matplotlib.use("Agg")
@@ -246,7 +246,7 @@ if __name__ == "__main__":
     U = unitary_group.rvs(2 ** n, random_state=7)
     ops = synthesize(U)
     print(f"gates: {len(ops)}   CNOT+CZ: {count_2q(ops)}   error: {dist_up_to_phase(circuit_unitary(ops, n), U):.2e}")
-    ops = lower_cz(ops)                              # every CZ -> H . CNOT . H
+    ops = lower_cz(ops)                              # todo CZ -> H . CNOT . H
     err = dist_up_to_phase(circuit_unitary(ops, n), U)
     print(f"after CZ -> CNOT lowering: CNOTs = {count_cnots(ops)}  (paper: 20)   error = {err:.2e}")
     assert count_cnots(ops) == 20 and err < 1e-9
