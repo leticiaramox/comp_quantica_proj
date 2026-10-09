@@ -20,8 +20,6 @@ CNOT10 = np.array([[1, 0, 0, 0], [0, 0, 0, 1], [0, 0, 1, 0], [0, 1, 0, 0]], dtyp
 
 # --------------------------------- multiplexed rotation (Thm 8, Gray code) ---
 def mux_rotation(ops, axis, target, controls, angles, entangler="CNOT"):
-    """Uniformly controlled Ry/Rz: angles[j] is applied to `target` when the control
-    register (controls[0] = MSB) holds j. Uses 2^k entangling gates (CNOT, or CZ for Ry)."""
     k = len(controls)
     angles = np.asarray(angles, dtype=float)
     if k == 0:
