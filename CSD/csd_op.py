@@ -296,7 +296,7 @@ def benchmark_random(ns=(2, 3, 4, 5, 6)):
 
 
 # =====================================================================
-# 8. QCLIB OPTION 1: decompose unitaries extracted from qclib state-prep
+# 8. QCLIB: decompose unitaries extracted from qclib state-prep
 # =====================================================================
 def benchmark_qclib(n_trials=5, seed=42):
     """
