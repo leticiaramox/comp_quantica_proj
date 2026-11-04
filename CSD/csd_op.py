@@ -2,7 +2,8 @@ import numpy as np
 import scipy.linalg as la
 from scipy.linalg import cossin
 from qiskit import QuantumCircuit
-from qiskit.quantum_info import Operator, random_unitary
+from qiskit.quantum_info import Operator, random_unitary, Statevector
+from qclib.state_preparation import LowRankInitialize
 
 
 # =====================================================================
@@ -22,10 +23,6 @@ def identificar_bit_alterado(gray1, gray2):
 
 
 def aplicar_multiplexed_r(qc, tipo_porta, angles, target_qubit, control_qubits):
-    """
-    Uniformly controlled Ry/Rz (2^k CNOTs).  angles[i]: rotation used when the
-    controls hold the state i, with control_qubits[p] = bit p of i.
-    """
     k = len(control_qubits)
     angles = np.asarray(angles, dtype=float)
     if len(angles) != 2**k:
@@ -52,10 +49,6 @@ def aplicar_multiplexed_r(qc, tipo_porta, angles, target_qubit, control_qubits):
 
 
 def aplicar_diagonal(qc, fases, qubits_le):
-    """
-    Diagonal gate diag(e^{i fases[x]}), x little endian over qubits_le, with
-    2^m - 2 CNOTs: cascade of uniformly controlled Rz (Bullock-Markov).
-    """
     fases = np.asarray(fases, dtype=float)
     m = len(qubits_le)
     if m == 1:
@@ -72,7 +65,6 @@ def aplicar_diagonal(qc, fases, qubits_le):
 # 2. F~ : UNIFORMLY CONTROLLED ONE-QUBIT GATE UP TO A DIAGONAL (Sec. 3.2)
 # =====================================================================
 def factor_onefold_multiplexor(a, b, tol=1e-8):
-    """Constant quantum multiplexor, Eqs. (13)-(22):  a = r†udv,  b = rud†v."""
     a = np.asarray(a, dtype=complex)
     b = np.asarray(b, dtype=complex)
     X = a @ b.conj().T
@@ -95,12 +87,6 @@ def factor_onefold_multiplexor(a, b, tol=1e-8):
 
 
 def decompose_ucg_tilde(blocks, controls, target, tol=1e-8):
-    """
-    F = sum_j |j><j| ⊗ blocks[j]  (controls[0] = most significant control).
-    Returns (operations, delta):   F = diag(delta) @ F~,
-    delta indexed by (control state, MSB first; target as LSB).
-    F~ uses 2^k one-qubit gates and 2^k - 1 D gates (one CNOT each).
-    """
     blocks = [np.asarray(U, dtype=complex) for U in blocks]
     k = len(controls)
     if len(blocks) != 2**k:
@@ -128,7 +114,6 @@ def decompose_ucg_tilde(blocks, controls, target, tol=1e-8):
 
 
 def emitir_ops(qc, operations, qubits):
-    """D = exp(i pi/4 Z⊗Z) = H CX H · S† S† · e^{i pi/4}  (Fig. 5); 1 CNOT."""
     for item in operations:
         if item[0] == "U":
             qc.unitary(item[2], [qubits[item[1]]], label="U")
@@ -147,11 +132,6 @@ def emitir_ops(qc, operations, qubits):
 # 3. RECURSIVE CSD  ->  LIST OF UNIFORMLY CONTROLLED ONE-QUBIT LAYERS (Eq. 31)
 # =====================================================================
 def _canonico(n, target, cl, blocos):
-    """
-    Re-index blocks to the canonical order of a layer: control qubits =
-    sorted positions != target, bit p of the index <-> others[p].
-    `blocos` is indexed with bit p <-> cl[p].
-    """
     others = [q for q in range(n) if q != target]
     pos = {q: p for p, q in enumerate(others)}
     out = [None] * 2**(n - 1)
@@ -164,22 +144,18 @@ def _canonico(n, target, cl, blocos):
 
 
 def camadas_csd(Us, qubits, ctrl, n):
-    """
-    Us: unitaries (dim 2^len(qubits)) indexed by the state of `ctrl`
-    (bit p <-> ctrl[p]).  Returns [(target, blocks_canonical), ...] in TIME order.
-    """
     m = len(qubits)
     if m == 1:
         return [(qubits[0], _canonico(n, qubits[0], ctrl, list(Us)))]
 
     half = 2**(m - 1)
     top, lower = qubits[-1], qubits[:-1]
-    cs = [cossin(U, p=half, q=half, separate=True) for U in Us]   # (u1,u2),th,(v1h,v2h)
+    cs = [cossin(U, p=half, q=half, separate=True) for U in Us]
 
-    U_dir = [c[2][0] for c in cs] + [c[2][1] for c in cs]         # v1h_j (top=0), v2h_j (top=1)
+    U_dir = [c[2][0] for c in cs] + [c[2][1] for c in cs]
     U_esq = [c[0][0] for c in cs] + [c[0][1] for c in cs]
 
-    ry = [None] * (len(Us) * half)                                # index = j + len(Us)·l
+    ry = [None] * (len(Us) * half)
     for l in range(half):
         for j in range(len(Us)):
             th = cs[j][1][l]
@@ -202,21 +178,21 @@ def ultima_camada(qc, blocos, controls, t, qubits):
 
     for j in range(half):
         a, b = blocos[j], blocos[j + half]
-        T, V = la.schur(a @ b.conj().T, output='complex')        # a b† = u d² u†
+        T, V = la.schur(a @ b.conj().T, output='complex')
         ev = np.diag(T) / np.abs(np.diag(T))
         th = np.angle(ev) / 2
         d = np.exp(1j * th)
-        v = d[:, None] * (V.conj().T @ b)                        # v = d u† b
+        v = d[:, None] * (V.conj().T @ b)
         assert la.norm(a - V @ np.diag(d) @ v) < 1e-8
         assert la.norm(b - V @ np.diag(d.conj()) @ v) < 1e-8
         u_blocks.append(V)
         v_blocks.append(v)
         thetas[j] = th
 
-    ops_v, delta_v = decompose_ucg_tilde(v_blocks, rest, t)      # time order: v,
+    ops_v, delta_v = decompose_ucg_tilde(v_blocks, rest, t)
     emitir_ops(qc, ops_v, qubits)
 
-    ang = np.empty(2 * half)                                     # d ⊕ d†  = Rz-mux on c0
+    ang = np.empty(2 * half)
     for j in range(half):
         for bit in (0, 1):
             ang[j + half * bit] = -2.0 * thetas[j, bit]
@@ -224,10 +200,9 @@ def ultima_camada(qc, blocos, controls, t, qubits):
     aplicar_multiplexed_r(qc, 'z', ang, qubits[c0], ctrl_le)
 
     u_adj = [u_blocks[j] @ np.diag(delta_v[2*j:2*j+2]) for j in range(half)]
-    ops_u, delta_u = decompose_ucg_tilde(u_adj, rest, t)         # then u
+    ops_u, delta_u = decompose_ucg_tilde(u_adj, rest, t)
     emitir_ops(qc, ops_u, qubits)
 
-    # remaining diagonal acts on `rest` + t only
     aplicar_diagonal(qc, np.angle(delta_u), [qubits[q] for q in (rest + [t])[::-1]])
 
 
@@ -235,7 +210,6 @@ def ultima_camada(qc, blocos, controls, t, qubits):
 # 5. FULL ALGORITHM
 # =====================================================================
 def decompor_unitaria(qc, U, qubits):
-    """Appends to qc a circuit that implements U (exactly, global phase included)."""
     U = np.asarray(U, dtype=complex)
     qubits = list(qubits)
     n = len(qubits)
@@ -246,19 +220,18 @@ def decompor_unitaria(qc, U, qubits):
         return
 
     camadas = camadas_csd([U], list(range(n)), [], n)
-    pend = np.ones(2**n, dtype=complex)           # diagonal waiting to be absorbed
+    pend = np.ones(2**n, dtype=complex)
 
     for k, (t, blocos) in enumerate(camadas):
         others = [q for q in range(n) if q != t]
         gidx = np.array([[(b << t) | sum(((j >> p) & 1) << q for p, q in enumerate(others))
                           for b in (0, 1)] for j in range(2**(n - 1))])
 
-        # absorb the diagonal left by the previous layer:  F_k · Delta_{k-1}   (Eqs. 33-34)
         blocos = [blocos[j] * pend[gidx[j]][None, :] for j in range(2**(n - 1))]
-        controls = others[::-1]                    # most significant first
+        controls = others[::-1]
 
         if k < len(camadas) - 1:
-            ops, delta = decompose_ucg_tilde(blocos, controls, t)   # F = Delta F~  (Eq. 32)
+            ops, delta = decompose_ucg_tilde(blocos, controls, t)
             emitir_ops(qc, ops, qubits)
             pend = np.empty(2**n, dtype=complex)
             pend[gidx.reshape(-1)] = delta
@@ -267,14 +240,12 @@ def decompor_unitaria(qc, U, qubits):
 
 
 def cnots_esperados(n):
-    """4^n/2 - 2^(n-1) - 2 (Sec. 5.1); n=2: 4, n=3: 26."""
     return 4**n // 2 - 2**(n - 1) - 2
 
 
 # =====================================================================
-# 6. PEEPHOLE: CX · CX = I  (also across gates on other qubits)
+# 6. PEEPHOLE: CX · CX = I
 # =====================================================================
-
 def otimizar_cancelamento_cnot(qc):
     instrs = list(qc.data)
     manter = [True] * len(instrs)
@@ -292,7 +263,7 @@ def otimizar_cancelamento_cnot(qc):
                     continue
         for q in qs:
             pilhas.setdefault(q, []).append(i)
-    novo = qc.copy_empty_like()                    # keeps global phase
+    novo = qc.copy_empty_like()
     for ins, ok in zip(instrs, manter):
         if ok:
             novo.append(ins.operation, ins.qubits, ins.clbits)
@@ -305,18 +276,86 @@ def erro_operador(qc, U):
     return np.linalg.norm(Uc - U), np.linalg.norm(Uc - np.exp(1j * fase) * U)
 
 
-if __name__ == "__main__":
-    for n in (2, 3, 4, 5, 6):
+# =====================================================================
+# 7. RANDOM-UNITARY BENCHMARK  (original)
+# =====================================================================
+def benchmark_random(ns=(2, 3, 4, 5, 6)):
+    print("=" * 70)
+    print("Benchmark: random unitaries")
+    print("=" * 70)
+    for n in ns:
         U = random_unitary(2**n).data
         qc = QuantumCircuit(n)
         decompor_unitaria(qc, U, list(range(n)))
         qc2 = otimizar_cancelamento_cnot(qc)
         e, ef = erro_operador(qc2, U)
         print(f"n={n}: CNOTs = {qc.count_ops().get('cx', 0):4d} "
-              f"(esperado {cnots_esperados(n):4d}; apos cancelamento {qc2.count_ops().get('cx', 0):4d}) "
-              f"| ||C-U|| = {e:.1e} (ate fase global {ef:.1e})")
+              f"(expected {cnots_esperados(n):4d}; after cancellation "
+              f"{qc2.count_ops().get('cx', 0):4d}) "
+              f"| ||C-U|| = {e:.1e} (up to global phase {ef:.1e})")
 
+
+# =====================================================================
+# 8. QCLIB OPTION 1: decompose unitaries extracted from qclib state-prep
+# =====================================================================
+def benchmark_qclib(n_trials=5, seed=42):
+    """
+    For each trial:
+      1. Draw a random normalized state vector of length 2^n.
+      2. Build a qclib LowRankInitialize circuit for that state.
+      3. Extract the unitary U that qclib's circuit implements.
+      4. Decompose U with our CSD algorithm.
+      5. Check that our circuit reproduces U and also prepares |psi>.
+    """
+    print()
+    print("=" * 70)
+    print("Benchmark: unitaries extracted from qclib LowRankInitialize")
+    print("=" * 70)
+    rnd = np.random.RandomState(seed)
+
+    for n in (2, 3, 4):
+        print(f"\n--- n = {n} qubit(s) ---")
+        for trial in range(n_trials):
+            # 1. Random normalized state
+            psi = rnd.rand(2**n) + 1j * rnd.rand(2**n)
+            psi /= np.linalg.norm(psi)
+
+            # 2. qclib state-prep circuit
+            prep_circuit = LowRankInitialize(psi).definition
+
+            # 3. Unitary that qclib implements
+            U_qclib = Operator(prep_circuit).data
+
+            # 4. Our CSD decomposition of that unitary
+            qc = QuantumCircuit(n)
+            decompor_unitaria(qc, U_qclib, list(range(n)))
+            qc2 = otimizar_cancelamento_cnot(qc)
+
+            # 5a. Operator error
+            e, ef = erro_operador(qc2, U_qclib)
+
+            # 5b. State fidelity: both circuits should prepare the same state
+            #     starting from |0...0>.  qclib may use a different qubit order,
+            #     so we compare via the unitary columns (column 0 = action on |0>).
+            sv_qclib = U_qclib[:, 0]           # qclib maps |0> -> psi (up to phase/order)
+            sv_ours  = Operator(qc2).data[:, 0]
+            fidelity = abs(np.dot(sv_qclib.conj(), sv_ours))
+
+            our_cx   = qc2.count_ops().get('cx', 0)
+            qclib_cx = prep_circuit.count_ops().get('cx', 0)
+
+            print(f"  trial {trial+1}: ||C-U|| = {e:.1e}  (phase-free {ef:.1e})  "
+                  f"fidelity = {fidelity:.6f}  "
+                  f"CNOTs: ours={our_cx}  qclib={qclib_cx}  expected={cnots_esperados(n)}")
+
+
+if __name__ == "__main__":
+    benchmark_random(ns=(2, 3, 4, 5, 6))
+    benchmark_qclib(n_trials=5)
+
+    # Visual circuit for n=3 (original)
     U8 = random_unitary(8).data
     circ = QuantumCircuit(3)
     decompor_unitaria(circ, U8, [0, 1, 2])
+    print()
     print(otimizar_cancelamento_cnot(circ).draw(output='text', fold=200))
